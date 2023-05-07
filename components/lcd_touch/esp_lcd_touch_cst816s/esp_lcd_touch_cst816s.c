@@ -143,7 +143,7 @@ static esp_err_t read_data(esp_lcd_touch_handle_t tp)
         tp->data.coords[i].y = point.y_h << 8 | point.y_l;
     }
     portEXIT_CRITICAL(&tp->data.lock);
-#if CONFIG_ESP_LCD_TOUCH_CST816S_USE_INTERUPTS
+#if CONFIG_ESP_LCD_TOUCH_CST816S_USE_INTERRUPTS
 	}
 	else {
 		tp->data.points = 0;
