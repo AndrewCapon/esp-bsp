@@ -1,0 +1,7 @@
+menu "ESP LCD TOUCH CST816S"
+
+    config ESP_LCD_TOUCH_CST816S_USE_INTERRUPTS
+        bool "Only read via I2C after interrupt"
+        default "n"
+        
+endmenu

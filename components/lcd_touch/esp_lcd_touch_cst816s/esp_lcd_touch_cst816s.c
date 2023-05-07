@@ -34,6 +34,17 @@ static esp_err_t i2c_read_bytes(esp_lcd_touch_handle_t tp, uint16_t reg, uint8_t
 static esp_err_t reset(esp_lcd_touch_handle_t tp);
 static esp_err_t read_id(esp_lcd_touch_handle_t tp);
 
+#if CONFIG_ESP_LCD_TOUCH_CST816S_USE_INTERRUPTS
+static esp_lcd_touch_interrupt_callback_t chained_callback = NULL;
+static bool cst816s_interrupt_occurred = false;
+static void IRAM_ATTR cst816s_int_handler(esp_lcd_touch_handle_t tp)
+{
+    cst816s_interrupt_occurred = true;
+    if(NULL != chained_callback)
+		chained_callback(tp);
+}
+#endif
+
 esp_err_t esp_lcd_touch_new_i2c_cst816s(const esp_lcd_panel_io_handle_t io, const esp_lcd_touch_config_t *config, esp_lcd_touch_handle_t *tp)
 {
     ESP_RETURN_ON_FALSE(io, ESP_ERR_INVALID_ARG, TAG, "Invalid io");
@@ -53,8 +64,15 @@ esp_err_t esp_lcd_touch_new_i2c_cst816s(const esp_lcd_panel_io_handle_t io, cons
     cst816s->del = del;
     /* Mutex */
     cst816s->data.lock.owner = portMUX_FREE_VAL;
+
     /* Save config */
     memcpy(&cst816s->config, config, sizeof(esp_lcd_touch_config_t));
+
+#if CONFIG_ESP_LCD_TOUCH_CST816S_USE_INTERRUPTS
+    /* setup chained callback  */
+    chained_callback = cst816s->config.interrupt_callback;
+    cst816s->config.interrupt_callback = cst816s_int_handler;
+#endif
 
     /* Prepare pin for touch interrupt */
     if (cst816s->config.int_gpio_num != GPIO_NUM_NC) {
@@ -80,6 +98,10 @@ esp_err_t esp_lcd_touch_new_i2c_cst816s(const esp_lcd_panel_io_handle_t io, cons
     }
     /* Reset controller */
     ESP_GOTO_ON_ERROR(reset(cst816s), err, TAG, "Reset failed");
+
+    // wait for reset
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+
     /* Read product id */
     ESP_GOTO_ON_ERROR(read_id(cst816s), err, TAG, "Read version failed");
     *tp = cst816s;
@@ -95,6 +117,10 @@ err:
 
 static esp_err_t read_data(esp_lcd_touch_handle_t tp)
 {
+#if CONFIG_ESP_LCD_TOUCH_CST816S_USE_INTERRUPTS
+	if(cst816s_interrupt_occurred) {
+		cst816s_interrupt_occurred = false;
+#endif
     typedef struct {
         uint8_t num;
         uint8_t x_h : 4;
@@ -117,6 +143,12 @@ static esp_err_t read_data(esp_lcd_touch_handle_t tp)
         tp->data.coords[i].y = point.y_h << 8 | point.y_l;
     }
     portEXIT_CRITICAL(&tp->data.lock);
+#if CONFIG_ESP_LCD_TOUCH_CST816S_USE_INTERUPTS
+	}
+	else {
+		tp->data.points = 0;
+    }
+#endif
 
     return ESP_OK;
 }
