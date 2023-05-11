@@ -1,0 +1,9 @@
+menu "ESP LCD TOUCH XPT2046"
+    config ESP_LCD_TOUCH_XPT2046_Z_NEEDED_FOR_TOUCH
+        int "Z Pressure needed to register touch"
+        default 128
+
+    config ESP_LCD_TOUCH_XPT2046_Z_OVERSAMPLE_COUNT
+        int "Number of times to oversample X&Y reads"
+        default 4
+endmenu

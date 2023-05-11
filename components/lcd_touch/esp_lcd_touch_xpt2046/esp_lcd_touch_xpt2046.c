@@ -30,10 +30,10 @@ static gpio_num_t int_gpio_num = GPIO_NUM_NC;
 static struct xpt2046_calibration_data calibration_data = {
 		.min.x = 200,
 		.min.y = 360,
-		.min.z = 6400,
+		.min.z = 5000,
 		.max.x = 3750,
 		.max.y = 3850,
-		.max.z = 15700,
+		.max.z = 13000,
 		.pixel_inset = 0
 };
 
@@ -100,14 +100,15 @@ err:
 
 static inline esp_err_t xpt2046_read_register(esp_lcd_touch_handle_t tp, uint8_t reg, uint16_t *value)
 {
-    uint8_t buf[2] = {0, 0};
-    *value = ((buf[0] << 8) | (buf[1]));
+    uint8_t buffer[2] = {0, 0};
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_rx_param(tp->io, reg, buffer, 2), TAG, "XPT2046 read error!");
+    *value = ((((uint16_t)buffer[0]) << 8) | ((uint16_t)buffer[1])) >> 3;
     return ESP_OK;
 }
 
-static inline esp_err_t XPT2046_transfer_16_add(esp_lcd_touch_handle_t tp, uint8_t cmd, uint32_t *value) {
+static inline esp_err_t XPT2046_transfer_16_add(esp_lcd_touch_handle_t tp, uint8_t reg, uint32_t *value) {
 		uint8_t buffer[2] = {0, 0};
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_rx_param(tp->io, cmd, buffer, 2), TAG, "XPT2046 read error!");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_rx_param(tp->io, reg, buffer, 2), TAG, "XPT2046 read error!");
 		*value += ((((uint16_t)buffer[0]) << 8) | ((uint16_t)buffer[1])) >> 3;
 
 		return ESP_OK;
@@ -126,60 +127,47 @@ static esp_err_t esp_lcd_touch_xpt2046_read_data(esp_lcd_touch_handle_t tp)
 	  }
 
 	  if(touch_down) {
-				uint16_t average_samples = 8;
+				uint16_t average_samples = CONFIG_ESP_LCD_TOUCH_XPT2046_Z_OVERSAMPLE_COUNT;
 				uint32_t raw_x = 0;
 				uint32_t raw_y = 0;
-				uint32_t raw_z1 = 0;
-				uint32_t raw_z2 = 0;
-				uint16_t discard_x;
+				uint16_t raw_z1 = 0;
+				uint16_t raw_z2 = 0;
+				uint16_t discard_x = 0;
 
 				// wake and throw away value
 				ESP_RETURN_ON_ERROR(xpt2046_read_register(tp, ESP_LCD_TOUCH_XPT2046_READ_X, &discard_x), TAG, "XPT2046 read error!");
 
-				for(uint16_t u = 0 ; u < average_samples; u++) {
-					ESP_RETURN_ON_ERROR(XPT2046_transfer_16_add(tp, ESP_LCD_TOUCH_XPT2046_READ_X, &raw_x), TAG, "XPT2046 read error!");
-					ESP_RETURN_ON_ERROR(XPT2046_transfer_16_add(tp, ESP_LCD_TOUCH_XPT2046_READ_Y, &raw_y), TAG, "XPT2046 read error!");
-					ESP_RETURN_ON_ERROR(XPT2046_transfer_16_add(tp, ESP_LCD_TOUCH_XPT2046_READ_Z1, &raw_z1), TAG, "XPT2046 read error!");
-					ESP_RETURN_ON_ERROR(XPT2046_transfer_16_add(tp, ESP_LCD_TOUCH_XPT2046_READ_Z2, &raw_z2), TAG, "XPT2046 read error!");
-				}
+				// basic rejection on z1
+				ESP_RETURN_ON_ERROR(xpt2046_read_register(tp, ESP_LCD_TOUCH_XPT2046_READ_Z1, &raw_z1), TAG, "XPT2046 read error!");
 
+				if(raw_z1 > CONFIG_ESP_LCD_TOUCH_XPT2046_Z_NEEDED_FOR_TOUCH) {
+					  ESP_RETURN_ON_ERROR(xpt2046_read_register(tp, ESP_LCD_TOUCH_XPT2046_READ_Z2, &raw_z2), TAG, "XPT2046 read error!");
 
-				// recheck int pin
-			  if(int_gpio_num!= GPIO_NUM_NC) {
-			  		touch_down = gpio_get_level(int_gpio_num);
-			  }
-
-			  if(touch_down) {
-						raw_x /= average_samples;
-						raw_y /= average_samples;
-						raw_z1 /= average_samples;
-						raw_z2 /= average_samples;
-
-						if(raw_z1 == 0)
-							raw_z1 = 1;
-
-						uint32_t raw_z = ((((raw_z2) / raw_z1) -1) * raw_x);
-
-						//printf("raw (%lu,%lu,%lu)", raw_x, raw_y, raw_z);
-
-						// clamp raw to calibration data
-						raw_x = xpt2046_clamp(raw_x, calibration_data.min.x, calibration_data.max.x);
-						raw_y = xpt2046_clamp(raw_y, calibration_data.min.y, calibration_data.max.y);
-
-						// calc Z from calibration data
-						// if we are not at mid point of calibration set touch off.
-						int32_t z = -1;
-						uint32_t mid_z = calibration_data.min.z + (((calibration_data.max.z - calibration_data.min.z)/10)*5);
-						if(raw_z > mid_z) {
-								touch_down = false;
-						}
-						else {
-								raw_z = xpt2046_clamp(raw_z, calibration_data.min.z, mid_z);
-								z = 100-(((raw_z - calibration_data.min.z) * 100) / (mid_z - calibration_data.min.z));
+						for(uint16_t u = 0 ; u < average_samples; u++) {
+							ESP_RETURN_ON_ERROR(XPT2046_transfer_16_add(tp, ESP_LCD_TOUCH_XPT2046_READ_X, &raw_x), TAG, "XPT2046 read error!");
+							ESP_RETURN_ON_ERROR(XPT2046_transfer_16_add(tp, ESP_LCD_TOUCH_XPT2046_READ_Y, &raw_y), TAG, "XPT2046 read error!");
 						}
 
 
-		        if(touch_down) {
+						// recheck int pin
+						if(int_gpio_num!= GPIO_NUM_NC) {
+								touch_down = gpio_get_level(int_gpio_num);
+						}
+
+						if(touch_down) {
+								raw_x /= average_samples;
+								raw_y /= average_samples;
+
+								uint16_t raw_z = ((((raw_z2) / raw_z1) -1) * (raw_x+1));
+
+								// clamp raw to calibration data
+								raw_x = xpt2046_clamp(raw_x, calibration_data.min.x, calibration_data.max.x);
+								raw_y = xpt2046_clamp(raw_y, calibration_data.min.y, calibration_data.max.y);
+
+								// calc Z from calibration data
+								raw_z = xpt2046_clamp(raw_z, calibration_data.min.z, calibration_data.max.z);
+								uint16_t z = 100-(((raw_z - calibration_data.min.z) * 100) / (calibration_data.max.z - calibration_data.min.z));
+
 								// convert to screen (from calibration data)
 								uint32_t y, x;
 
@@ -192,13 +180,13 @@ static esp_err_t esp_lcd_touch_xpt2046_read_data(esp_lcd_touch_handle_t tp)
 								y = xpt2046_clamp(y, 0, tp->config.y_max);
 
 								portENTER_CRITICAL(&tp->data.lock);
-				        tp->data.coords[0].x = x;
-				        tp->data.coords[0].y = y;
-				        tp->data.coords[0].strength = z;
-				        tp->data.points = 1;
-				        portEXIT_CRITICAL(&tp->data.lock);
-		        }
-			  }
+								tp->data.coords[0].x = x;
+								tp->data.coords[0].y = y;
+								tp->data.coords[0].strength = z;
+								tp->data.points = 1;
+								portEXIT_CRITICAL(&tp->data.lock);
+						}
+				}
 	  }
 
 	  if(!touch_down) {
